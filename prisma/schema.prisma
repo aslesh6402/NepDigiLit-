@@ -1,0 +1,423 @@
+model Verification {
+  id        String   @id @default(cuid())
+  email     String
+  code      String
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(STUDENT)
+  grade     String?
+  school    String?
+  language  Language @default(ENGLISH)
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  progress          ModuleProgress[]
+  achievements      UserAchievement[]
+  chatSessions      ChatSession[]
+  examSessions      ExamSession[]
+  todoProgress      TodoProgress[]
+  createdTodos      Todo[]             @relation("TeacherTodos")
+  createdQuizzes    Quiz[]             @relation("TeacherQuizzes")
+  createdExams      Exam[]             @relation("TeacherExams")
+  quizAttempts      QuizAttempt[]
+  examAttempts      ExamAttempt[]
+  cheatingIncidents CheatingIncident[]
+
+  @@map("users")
+}
+
+model Module {
+  id          String     @id @default(cuid())
+  title       Json // Bilingual: { en: "Title", ne: "शीर्षक" }
+  description Json // Bilingual: { en: "Description", ne: "विवरण" }
+  category    Category
+  difficulty  Difficulty
+  duration    Int // in minutes
+  lessons     Json // Store lessons as JSON with bilingual content
+  todos       Json? // Store todos/tasks as JSON with bilingual content
+  isActive    Boolean    @default(true)
+  isOffline   Boolean    @default(true) // Can be downloaded for offline use
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  progress      ModuleProgress[]
+  examSessions  ExamSession[]
+  todoProgress  TodoProgress[]
+  moduleTodos   Todo[]
+  moduleQuizzes Quiz[]
+  moduleExams   Exam[]
+
+  @@map("modules")
+}
+
+model ModuleProgress {
+  id            String   @id @default(cuid())
+  userId        String
+  moduleId      String
+  completed     Boolean  @default(false)
+  score         Int?
+  timeSpent     Int      @default(0) // in minutes
+  currentLesson Int      @default(0)
+  lastAccessed  DateTime @default(now())
+  isOffline     Boolean  @default(false) // Downloaded for offline use
+  syncPending   Boolean  @default(false) // Needs to sync when online
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleId])
+  @@map("module_progress")
+}
+
+model TodoProgress {
+  id        String   @id @default(cuid())
+  userId    String
+  moduleId  String?
+  todoId    String? // Reference to separate Todo model
+  oldTodoId Int? // Index of todo in the module's todos array (legacy)
+  completed Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module Module? @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  todo   Todo?   @relation(fields: [todoId], references: [id], onDelete: Cascade)
+
+  @@map("todo_progress")
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  name        Json // Bilingual
+  description Json // Bilingual
+  icon        String
+  criteria    Json // Store criteria as JSON
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  userAchievements UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String
+  achievementId String
+  earnedAt      DateTime @default(now())
+
+  // Relations
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
+}
+
+model ChatSession {
+  id        String   @id @default(cuid())
+  userId    String? // Optional for anonymous users
+  messages  Json // Store messages as JSON with language info
+  language  Language @default(ENGLISH)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("chat_sessions")
+}
+
+model ExamSession {
+  id              String     @id @default(cuid())
+  userId          String
+  moduleId        String
+  startTime       DateTime   @default(now())
+  endTime         DateTime?
+  score           Int?
+  status          ExamStatus @default(IN_PROGRESS)
+  deviceInfo      Json // Browser, OS, screen resolution
+  ipAddress       String
+  tabSwitches     Int        @default(0)
+  suspiciousFlags Json       @default("[]") // Array of suspicious activities
+  isProctored     Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@map("exam_sessions")
+}
+
+model OfflineContent {
+  id        String   @id @default(cuid())
+  userId    String
+  moduleId  String
+  content   Json // Cached module content
+  version   String // Content version for sync
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, moduleId])
+  @@map("offline_content")
+}
+
+// Teacher-created todos (separate from module todos)
+model Todo {
+  id           String    @id @default(cuid())
+  title        Json // Bilingual: { en: "Title", ne: "शीर्षक" }
+  description  Json // Bilingual: { en: "Description", ne: "विवरण" }
+  instructions Json // Detailed instructions for the todo
+  moduleId     String? // Optional - can be module-specific or general
+  teacherId    String
+  priority     Priority  @default(MEDIUM)
+  dueDate      DateTime?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  teacher  User           @relation("TeacherTodos", fields: [teacherId], references: [id], onDelete: Cascade)
+  module   Module?        @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  progress TodoProgress[]
+
+  @@map("todos")
+}
+
+// Dynamic quiz system
+model Quiz {
+  id               String    @id @default(cuid())
+  title            Json // Bilingual
+  description      Json // Bilingual
+  moduleId         String? // Optional - can be module-specific or general
+  teacherId        String
+  questions        Json // Array of questions with options and correct answers
+  timeLimit        Int? // in minutes, null for unlimited
+  maxAttempts      Int       @default(1) // Number of allowed attempts
+  shuffleQuestions Boolean   @default(false)
+  shuffleOptions   Boolean   @default(false)
+  showResults      Boolean   @default(true) // Show results immediately after completion
+  passingScore     Int       @default(60) // Percentage
+  isActive         Boolean   @default(true)
+  startDate        DateTime?
+  endDate          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  teacher  User          @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
+  module   Module?       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  attempts QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+// Quiz attempts tracking
+model QuizAttempt {
+  id              String        @id @default(cuid())
+  quizId          String
+  userId          String
+  answers         Json // Student's answers
+  score           Int? // Percentage score
+  timeSpent       Int // in seconds
+  startTime       DateTime      @default(now())
+  endTime         DateTime?
+  status          AttemptStatus @default(IN_PROGRESS)
+  ipAddress       String
+  userAgent       Json // Browser info
+  tabSwitches     Int           @default(0)
+  suspiciousFlags Json          @default("[]")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("quiz_attempts")
+}
+
+// Comprehensive exam system with anti-cheating
+model Exam {
+  id                 String   @id @default(cuid())
+  title              Json // Bilingual
+  description        Json // Bilingual
+  moduleId           String? // Optional - can be module-specific or general
+  teacherId          String
+  questions          Json // Array of questions with options and correct answers
+  totalMarks         Int
+  duration           Int // in minutes
+  maxAttempts        Int      @default(1)
+  shuffleQuestions   Boolean  @default(true)
+  shuffleOptions     Boolean  @default(true)
+  proctoringEnabled  Boolean  @default(true)
+  allowTabSwitch     Boolean  @default(false)
+  maxTabSwitches     Int      @default(0)
+  webcamRequired     Boolean  @default(false)
+  fullScreenRequired Boolean  @default(true)
+  showResults        Boolean  @default(false) // Teachers review manually
+  passingMarks       Int
+  startDate          DateTime
+  endDate            DateTime
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  teacher  User          @relation("TeacherExams", fields: [teacherId], references: [id], onDelete: Cascade)
+  module   Module?       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  attempts ExamAttempt[]
+
+  @@map("exams")
+}
+
+// Exam attempts with comprehensive tracking
+model ExamAttempt {
+  id         String        @id @default(cuid())
+  examId     String
+  userId     String
+  answers    Json // Student's answers
+  score      Int? // Total marks obtained
+  percentage Float? // Percentage score
+  timeSpent  Int // in seconds
+  startTime  DateTime      @default(now())
+  endTime    DateTime?
+  status     AttemptStatus @default(IN_PROGRESS)
+
+  // Anti-cheating tracking
+  ipAddress        String
+  userAgent        Json // Browser and device info
+  screenResolution Json // Screen resolution
+  tabSwitches      Int     @default(0)
+  tabSwitchTimes   Json    @default("[]") // Timestamps of tab switches
+  mouseLeftCount   Int     @default(0) // Mouse leaving the window
+  keyboardEvents   Json    @default("[]") // Suspicious keyboard events
+  fullScreenExits  Int     @default(0)
+  rightClicks      Int     @default(0)
+  copyPasteEvents  Int     @default(0)
+  suspiciousFlags  Json    @default("[]") // Array of flagged activities
+  riskScore        Int     @default(0) // Calculated risk score (0-100)
+  isReviewed       Boolean @default(false)
+  reviewNotes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  exam              Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cheatingIncidents CheatingIncident[]
+
+  @@map("exam_attempts")
+}
+
+// Detailed cheating incident tracking
+model CheatingIncident {
+  id            String       @id @default(cuid())
+  userId        String
+  examAttemptId String?
+  quizAttemptId String?
+  incidentType  CheatingType
+  description   String
+  evidence      Json // Screenshots, logs, etc.
+  severity      Severity
+  timestamp     DateTime     @default(now())
+  isResolved    Boolean      @default(false)
+  resolvedBy    String?
+  resolution    String?
+  resolvedAt    DateTime?
+
+  // Relations
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  examAttempt ExamAttempt? @relation(fields: [examAttemptId], references: [id], onDelete: Cascade)
+
+  @@map("cheating_incidents")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum Category {
+  DIGITAL_LITERACY
+  CYBERSECURITY
+  DIGITAL_COMMUNICATION
+  DATA_PRIVACY
+  ONLINE_ETHICS
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum Language {
+  ENGLISH
+  NEPALI
+}
+
+enum ExamStatus {
+  IN_PROGRESS
+  COMPLETED
+  FLAGGED
+  TERMINATED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum CheatingType {
+  PLAGIARISM
+  COLLUSION
+  IMPERSONATION
+  DEVICE_MALFUNCTION
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
